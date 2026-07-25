@@ -3046,6 +3046,22 @@ async function sendMagicLink(){
   else showGate(`<div class="gate-card"><div class="brand-mark">L</div><h1>Check your email</h1><p>We sent a sign-in link to <b>${esc(v.email)}</b>. Open it on this device to continue.</p></div>`);
 }
 async function signOut(){ await window.sbClient.auth.signOut(); location.reload(); }
+function showSetPassword(){
+  showGate(`<div class="gate-card"><div class="brand-mark">L</div><h1>Set your password</h1>
+    <p>Use this to sign in from now on — no email link needed. This also works if your account was first created with a sign-in link.</p>
+    <input id="setpw" type="password" placeholder="New password (8+ characters)" autocomplete="new-password" onkeydown="if(event.key==='Enter')saveNewPassword()">
+    <button class="btn btn-primary" onclick="saveNewPassword()">${icon('check',15)} Save password</button>
+    <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="hideGate()">Cancel</button>
+  </div>`);
+  setTimeout(()=>{ const e=$('#setpw'); if(e) e.focus(); },100);
+}
+async function saveNewPassword(){
+  const pw = $('#setpw').value;
+  if(!pw||pw.length<8){ $('#setpw').style.borderColor='var(--danger)'; $('#setpw').focus(); return; }
+  const {error} = await window.sbClient.auth.updateUser({password:pw});
+  if(error){ $('#setpw').style.borderColor='var(--danger)'; toast('Could not save password: '+error.message); return; }
+  hideGate(); toast('Password saved — use it next time you sign in');
+}
 
 /* --- public (customer-facing) pages via share tokens --- */
 async function publicQuotePage(token){
@@ -3107,7 +3123,8 @@ async function boot(){
   const chip = document.querySelector('.user-chip .role');
   if(chip) chip.textContent = cloudUser.email;
   document.querySelector('.sidebar-foot').insertAdjacentHTML('beforeend',
-    `<button class="btn btn-ghost btn-sm" style="width:100%;margin-top:6px;justify-content:flex-start" onclick="signOut()">${icon('arrowLeft',13)} Sign out</button>`);
+    `<button class="btn btn-ghost btn-sm" style="width:100%;margin-top:6px;justify-content:flex-start" onclick="showSetPassword()">${icon('pen',13)} Set / change password</button>
+     <button class="btn btn-ghost btn-sm" style="width:100%;margin-top:2px;justify-content:flex-start" onclick="signOut()">${icon('arrowLeft',13)} Sign out</button>`);
   hideGate();
   startRealtime();
   render();
