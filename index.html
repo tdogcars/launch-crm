@@ -1607,9 +1607,11 @@ function quoteToInvoice(qid){
   const t = quoteTotal(q);
   const num = 'INV-2026-' + (119 + DB.invoices.filter(i=>i.number.startsWith('INV-2026')).length - 6);
   const memo = q.title + (t.monthly?` — first month + one-time charges`:'');
-  DB.invoices.unshift({id:uid('i'),number:num,accountId:q.accountId,amount:Math.round(t.total),issued:todayStr(),due:plusDays(30),status:'Due',memo});
+  const newInv = {id:uid('i'),number:num,accountId:q.accountId,amount:Math.round(t.total),issued:todayStr(),due:plusDays(30),status:'Due',memo};
+  DB.invoices.unshift(newInv);
   closeModal(); toast(`Invoice ${num} created from ${q.number}`);
   nav('account',q.accountId); setAcctTab('billing');
+  if(window.CLOUD_ON && qbConnected) qbCreateInvoice(newInv.id);
 }
 
 /* ---------------- Invoices / Subscriptions / Billables ---------------- */
@@ -1625,8 +1627,12 @@ function invoiceTable(invoices,{acctCol=true}={}){
         <td class="num" style="font-weight:600">${money(i.amount)}</td>
         <td class="muted">${fmtDate(i.issued)}</td>
         <td class="muted">${fmtDate(i.due)}</td>
-        <td>${statusPill(i.status)}</td>
-        <td>${i.status!=='Paid'?`<button class="btn btn-secondary btn-sm" onclick="markPaid('${i.id}')">${icon('check',13)} Mark paid</button>`:''}</td>
+        <td>${statusPill(i.status)}${i.qbDoc?`<div class="cell-sub">QB No. ${esc(String(i.qbDoc))}</div>`:''}</td>
+        <td style="white-space:nowrap">
+          ${i.payLink?`<button class="btn btn-secondary btn-sm" onclick="copyPayLink('${i.id}')">${icon('creditCard',13)} Pay link</button> `:
+            (window.CLOUD_ON&&qbConnected&&!i.qbId&&i.status!=='Paid')?`<button class="btn btn-secondary btn-sm" onclick="qbCreateInvoice('${i.id}')">${icon('receipt',13)} Create in QB</button> `:''}
+          ${i.status!=='Paid'?`<button class="btn btn-secondary btn-sm" onclick="markPaid('${i.id}')">${icon('check',13)} Mark paid</button>`:''}
+        </td>
       </tr>`;
     }).join('')}</tbody></table></div>`;
 }
@@ -1641,6 +1647,13 @@ function viewInvoices(){
   return `
   <div class="page-head">
     <div><h1>Invoices</h1><div class="sub">${money(out)} outstanding across ${DB.invoices.filter(i=>i.status!=='Paid').length} open invoices.</div></div>
+    <div class="actions">
+      ${window.CLOUD_ON? (qbConnected===true
+        ? `<span class="pill pill-green">${icon('checkCircle',12)}QuickBooks connected</span>`
+        : qbConnected===false
+        ? `<button class="btn btn-secondary" onclick="qbConnect()">${icon('linkIcon',15)} Connect QuickBooks</button>`
+        : `<span class="pill pill-gray">QuickBooks: checking…</span>`) : ''}
+    </div>
   </div>
   <div class="filters"><div class="seg" role="group" aria-label="Filter invoices">
     ${filters.map(f=>`<button class="${state.invFilter===f?'active':''}" onclick="state.invFilter='${f}';render()">${f}${f!=='All'?` (${DB.invoices.filter(i=>i.status===f).length})`:''}</button>`).join('')}
@@ -3079,6 +3092,64 @@ async function publicFormPage(token){
   renderFormFill(data,{live:false});
 }
 
+/* ---------------- QuickBooks integration ---------------- */
+const QB_FN = (CFG.SUPABASE_URL||'') + '/functions/v1/qb';
+let qbConnected = null;   // null = unknown, false = not connected, true = connected
+async function qbAuthHeader(){
+  const {data:{session}} = await window.sbClient.auth.getSession();
+  return session? {authorization:'Bearer '+session.access_token} : null;
+}
+async function qbRefreshStatus(){
+  if(!window.CLOUD_ON || !cloudUser) return;
+  try{
+    const h = await qbAuthHeader(); if(!h) return;
+    const r = await fetch(QB_FN+'/status',{headers:h});
+    const j = await r.json();
+    qbConnected = !!j.connected;
+  }catch(e){ qbConnected = null; }
+  if(state.view==='invoices') render();
+}
+async function qbConnect(){
+  const {data:{session}} = await window.sbClient.auth.getSession();
+  if(!session) return;
+  window.open(QB_FN+'/connect?token='+encodeURIComponent(session.access_token),'_blank');
+  toast('Approve access in the QuickBooks window, then come back here');
+  const poll = setInterval(async ()=>{ await qbRefreshStatus(); if(qbConnected){ clearInterval(poll); toast('✅ QuickBooks connected'); render(); } }, 4000);
+  setTimeout(()=>clearInterval(poll), 180000);
+}
+async function qbCreateInvoice(invId){
+  const inv = DB.invoices.find(x=>x.id===invId);
+  if(!inv || inv.qbId) return;
+  const a = acct(inv.accountId);
+  const contact = DB.contacts.find(c=>c.accountId===inv.accountId && c.primary) || DB.contacts.find(c=>c.accountId===inv.accountId);
+  toast('Creating invoice in QuickBooks…');
+  try{
+    const h = await qbAuthHeader(); if(!h){ toast('Sign in first'); return; }
+    const r = await fetch(QB_FN+'/invoice',{
+      method:'POST', headers:{...h,'content-type':'application/json'},
+      body: JSON.stringify({
+        customerName: a? a.name : 'Customer',
+        customerEmail: contact&&contact.email&&contact.email.includes('@')? contact.email : undefined,
+        memo: inv.memo || inv.number,
+        dueDate: inv.due || undefined,
+        lines: [{desc: (inv.memo||inv.number)+' ('+inv.number+')', qty:1, rate: inv.amount}],
+      }),
+    });
+    const j = await r.json();
+    if(!r.ok || j.error){ toast('QuickBooks error: '+(j.error||r.status)); return; }
+    inv.qbId = j.qbInvoiceId; inv.qbDoc = j.docNumber; inv.payLink = j.payLink||null;
+    DB.activities.unshift({when:nowIso(),who:'tm',type:'invoice',text:`<b>${esc(inv.number)}</b> created in QuickBooks (No. ${esc(String(j.docNumber||''))})${j.payLink?' — pay link ready':''}`});
+    render();
+    toast(j.payLink? '✅ QuickBooks invoice + pay link ready' : '✅ Created in QuickBooks (enable QuickBooks Payments for pay links)');
+  }catch(e){ console.error(e); toast('Could not reach QuickBooks — try again'); }
+}
+function copyPayLink(invId){
+  const inv = DB.invoices.find(x=>x.id===invId);
+  if(!inv||!inv.payLink) return;
+  if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(inv.payLink).then(()=>toast('Pay link copied — send it to your client')).catch(()=>showLinkFallback(inv.payLink));
+  else showLinkFallback(inv.payLink);
+}
+
 /* ---------------- Boot ---------------- */
 async function boot(){
   $('#search-icon').innerHTML = icon('search',15);
@@ -3143,6 +3214,7 @@ async function boot(){
   hideGate();
   startRealtime();
   render();
+  qbRefreshStatus();
 }
 function hardReset(){
   try{ Object.keys(localStorage).filter(k=>k.startsWith('sb-')).forEach(k=>localStorage.removeItem(k)); }catch(e){}
