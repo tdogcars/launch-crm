@@ -708,6 +708,7 @@ const DB = {
     {id:'i6',number:'INV-2026-113',accountId:'a7',amount:640,issued:'2026-07-10',due:todayStr(),status:'Due',memo:'Teams — July'},
     {id:'i7',number:'INV-2026-112',accountId:'a6',amount:2300,issued:'2026-06-15',due:'2026-07-15',status:'Overdue',memo:'Onboarding services'},
   ],
+  payments:[],
   billables:[
     {id:'b1',accountId:'a1',desc:'Custom API integration work',type:'Hours',qty:12,rate:165,date:'2026-07-17',status:'Unbilled'},
     {id:'b2',accountId:'a3',desc:'On-site training day — Boise HQ',type:'Service',qty:1,rate:1800,date:'2026-07-14',status:'Unbilled'},
@@ -923,6 +924,12 @@ function statusPill(status){
     'Canceled':['pill-gray', 'x'],
     'Unbilled':['pill-amber','clock'],
     'Invoiced':['pill-green','checkCircle'],
+    'Succeeded':['pill-green','checkCircle'],
+    'Processing':['pill-amber','clock'],
+    'Refunded':['pill-gray','repeat'],
+    'Failed':['pill-red','alert'],
+    'Open':['pill-amber','clock'],
+    'Voided':['pill-gray','x'],
   };
   const [cls,ic] = map[status]||['pill-gray','clock'];
   return `<span class="pill ${cls}">${icon(ic,12)}${status}</span>`;
@@ -949,6 +956,7 @@ const NAV = [
   {group:'Revenue'},
   {id:'quotes',    label:'Quotes',    icon:'fileText', count:()=>DB.quotes.filter(q=>['Draft','Sent'].includes(q.status)).length},
   {id:'invoices',  label:'Invoices',  icon:'receipt', count:()=>DB.invoices.filter(i=>i.status!=='Paid').length},
+  {id:'payments',  label:'Payments',  icon:'creditCard', count:()=>DB.payments.length},
   {id:'subscriptions', label:'Subscriptions', icon:'repeat'},
   {id:'billables', label:'Billables', icon:'timer', count:()=>DB.billables.filter(b=>b.status==='Unbilled').length},
 ];
@@ -990,6 +998,7 @@ function render(){
   else if(v==='formBuilder') el.innerHTML = viewFormBuilder();
   else if(v==='quotes') el.innerHTML = viewQuotes();
   else if(v==='invoices') el.innerHTML = viewInvoices();
+  else if(v==='payments') el.innerHTML = viewPayments();
   else if(v==='subscriptions') el.innerHTML = viewSubscriptions();
   else if(v==='billables') el.innerHTML = viewBillables();
 }
@@ -1254,9 +1263,10 @@ function viewAccountDetail(id){
   const invoices = DB.invoices.filter(i=>i.accountId===id);
   const subs = DB.subscriptions.filter(s=>s.accountId===id);
   const bills = DB.billables.filter(b=>b.accountId===id);
+  const pays = DB.payments.filter(p=>p.accountId===id).sort((x,y)=>String(y.date||'').localeCompare(String(x.date||'')));
   const notes = DB.notes.filter(n=>n.accountId===id).sort((x,y)=>y.created.localeCompare(x.created));
   const tasks = DB.tasks.filter(t=>t.accountId===id);
-  const billingCount = invoices.length + subs.length + bills.length;
+  const billingCount = invoices.length + subs.length + bills.length + pays.length;
   const o = TEAM[a.owner];
 
   const tabs = [
@@ -1269,7 +1279,7 @@ function viewAccountDetail(id){
     ['contacts','Contacts',contacts.length],
   ];
 
-  const tabData = {contacts,deals,openDeals,quotes,invoices,subs,bills,notes,tasks};
+  const tabData = {contacts,deals,openDeals,quotes,invoices,subs,bills,pays,notes,tasks};
   return `
   <button class="btn btn-ghost btn-sm" onclick="nav('accounts')" style="margin:-6px 0 12px -8px">${icon('arrowLeft',14)} All accounts</button>
   <div class="acct-head">
@@ -1377,9 +1387,13 @@ function acctBilling(a,d){
       ${d.bills.map(b=>`<tr><td class="cell-main">${esc(b.desc)}</td><td><span class="pill pill-gray">${b.type}</span></td><td class="num">${b.qty}</td><td class="num">${money(b.rate)}</td><td class="num" style="font-weight:600">${money(b.qty*b.rate)}</td><td class="muted">${fmtDate(b.date)}</td><td>${statusPill(b.status)}</td></tr>`).join('')}
     </tbody></table></div>` : `<div class="empty"><div class="eicon">${icon('timer',18)}</div><h4>Nothing logged</h4><p>Track hours, services and products to bill later.</p><button class="btn btn-primary btn-sm" onclick="openModal('billable','${a.id}')">${icon('plus',13)} Log billable</button></div>`}
   </div>
-  <div class="card">
+  <div class="card section-gap">
     <div class="card-head"><h3>Invoices</h3></div>
     ${invoiceTable(d.invoices,{acctCol:false})}
+  </div>
+  <div class="card">
+    <div class="card-head"><h3>Payment history</h3><span class="spacer"></span><span class="muted" style="font-size:12.5px">${money(d.pays.filter(p=>p.status==='Succeeded').reduce((s,p)=>s+p.amount,0))} collected</span></div>
+    ${paymentsTable(d.pays,{acctCol:false})}
   </div>`;
 }
 
@@ -1660,6 +1674,33 @@ function viewInvoices(){
     ${filters.map(f=>`<button class="${state.invFilter===f?'active':''}" onclick="state.invFilter='${f}';render()">${f}${f!=='All'?` (${DB.invoices.filter(i=>i.status===f).length})`:''}</button>`).join('')}
   </div></div>
   <div class="card">${invoiceTable(rows)}</div>`;
+}
+function paymentsTable(pays,{acctCol=true}={}){
+  if(!pays.length) return `<div class="empty"><div class="eicon">${icon('creditCard',18)}</div><h4>No payments yet</h4><p>Payments collected through HubSpot appear here after a sync.</p></div>`;
+  return `<div class="table-wrap"><table class="tbl">
+    <thead><tr><th>Date</th>${acctCol?'<th>Account</th>':''}<th>Invoice</th><th>Paid by</th><th class="num">Amount</th><th>Status</th></tr></thead>
+    <tbody>${pays.map(p=>{
+      const a = p.accountId? acct(p.accountId) : null;
+      const inv = p.invoiceId? DB.invoices.find(i=>i.id===p.invoiceId) : null;
+      return `<tr>
+        <td class="cell-main">${p.date?fmtDateFull(p.date.slice(0,10)):'—'}</td>
+        ${acctCol?`<td>${a?`<span class="link" onclick="nav('account','${a.id}');setAcctTab('billing')">${esc(a.name)}</span>`:'<span class="muted">—</span>'}</td>`:''}
+        <td class="muted">${inv?esc(inv.number||('#'+(inv.hsId||inv.id))):'—'}</td>
+        <td class="muted">${esc(p.email||'—')}</td>
+        <td class="num" style="font-weight:600">${money(p.amount)}</td>
+        <td>${statusPill(p.status)}</td>
+      </tr>`;
+    }).join('')}</tbody></table></div>`;
+}
+function viewPayments(){
+  const pays = [...DB.payments].sort((x,y)=>String(y.date||'').localeCompare(String(x.date||'')));
+  const collected = pays.filter(p=>p.status==='Succeeded').reduce((s,p)=>s+p.amount,0);
+  return `
+  <div class="page-head">
+    <div><h1>Payments</h1><div class="sub">${money(collected)} collected across ${pays.filter(p=>p.status==='Succeeded').length} successful payments.</div></div>
+    <div class="actions">${window.CLOUD_ON?`<button class="btn btn-secondary" onclick="hsSync()">${icon('repeat',15)} Sync from HubSpot</button>`:''}</div>
+  </div>
+  <div class="card">${paymentsTable(pays)}</div>`;
 }
 function viewSubscriptions(){
   const active = DB.subscriptions.filter(s=>s.status!=='Canceled');
@@ -2922,7 +2963,7 @@ window.PUBLIC_TOKEN = null;
 window.sbClient = null;
 let cloudUser = null;
 const CLIENT_ID = uid('c');
-const SYNC_KEYS = ['accounts','contacts','deals','quotes','subscriptions','invoices','billables','notes','tasks','forms','workflows','activities','team'];
+const SYNC_KEYS = ['accounts','contacts','deals','quotes','subscriptions','invoices','payments','billables','notes','tasks','forms','workflows','activities','team'];
 const _hashes = {};
 const jhash = o => { const s=JSON.stringify(o); let h=5381; for(let i=0;i<s.length;i++) h=(((h<<5)+h)^s.charCodeAt(i))>>>0; return h; };
 const snapshot = k => k==='stages'? STAGES : k==='team'? TEAM : DB[k];
@@ -3159,7 +3200,7 @@ function copyPayLink(invId){
 /* ---------------- HubSpot sync (pull) ---------------- */
 async function hsSync(){
   if(!window.CLOUD_ON){ toast('HubSpot sync works on the live (cloud) app'); return; }
-  if(!confirm('Import from HubSpot?\n\nThis replaces the account, contact, deal, pipeline-stage, and team lists in Launch CRM with your HubSpot data. Records tied to accounts that no longer exist (sample data) are removed.')) return;
+  if(!confirm('Import from HubSpot?\n\nThis replaces the account, contact, deal, pipeline-stage, and team lists in Launch CRM with your HubSpot data — plus invoices, payment history, and subscriptions if your service key has those scopes. Records tied to accounts that no longer exist (sample data) are removed.')) return;
   toast('Importing from HubSpot — this can take ~30 seconds…');
   try{
     const h = await qbAuthHeader(); if(!h){ toast('Sign in first'); return; }
@@ -3216,15 +3257,55 @@ function applyHubspotData(j){
     closeDate:(d.closedate||'').slice(0,10)||plusDays(30),
     owner:teamId(d.owner), agent:teamId(d.owner), created:(d.created||'').slice(0,10)||todayStr(),
   })).filter(d=>d.accountId);
+  /* billing: invoices, payment history, subscriptions — linked to accounts like HubSpot */
+  const contactAcct = new Map(DB.contacts.map(c=>[c.hsId, c.accountId]));
+  const acctFor = (companyId, contactId) => acctByHs.get(String(companyId||'')) || contactAcct.get(String(contactId||'')) || null;
+  const cap = s => s? String(s).toLowerCase().replace(/_/g,' ').replace(/^./,ch=>ch.toUpperCase()) : '—';
+  if(Array.isArray(j.invoices) && j.invoices.length){
+    const local = DB.invoices.filter(i=>!i.hsId);           /* keep invoices created in Launch (quotes, QuickBooks) */
+    const mapped = j.invoices.map(i=>{
+      const raw = String(i.status||'').toLowerCase();
+      const due = (i.dueDate||'').slice(0,10);
+      const status = raw==='paid'?'Paid' : raw==='voided'?'Voided'
+        : (raw==='open'||raw==='pending'||parseFloat(i.balance)>0) ? ((due && due<todayStr())?'Overdue':'Due')
+        : cap(raw);
+      return {id:'hsi'+i.id, hsId:String(i.id), number:i.number||('HS-'+i.id),
+        accountId: acctFor(i.companyId, i.contactId),
+        amount: parseFloat(i.amount)||0, issued:(i.invoiceDate||'').slice(0,10)||todayStr(),
+        due: due||todayStr(), status, memo:'HubSpot invoice', payLink: i.link||null};
+    });
+    DB.invoices = [...mapped, ...local];
+  }
+  const invAcct = new Map(DB.invoices.map(i=>[i.hsId, i.accountId]));
+  DB.payments = (j.payments||[]).map(p=>({
+    id:'hsp'+p.id, hsId:String(p.id),
+    invoiceId: p.invoiceId? 'hsi'+p.invoiceId : null,
+    accountId: (p.invoiceId && invAcct.get(String(p.invoiceId))) || contactAcct.get(String(p.contactId||''))||null,
+    amount: parseFloat(p.amount)||0, status: cap(p.status), email: p.email||null,
+    date: p.date||null,
+  }));
+  if(Array.isArray(j.subscriptions) && j.subscriptions.length){
+    const localSubs = DB.subscriptions.filter(s=>!s.hsId);  /* keep subscriptions created from signed quotes */
+    const mappedSubs = j.subscriptions.map(s=>{
+      const raw = String(s.status||'').toLowerCase();
+      return {id:'hss'+s.id, hsId:String(s.id), accountId: acctFor(s.companyId, s.contactId),
+        plan: s.name||'HubSpot subscription', mrr: parseFloat(s.mrr)||0, cycle:'Monthly', seats:'—',
+        start:(s.startDate||'').slice(0,10)||todayStr(),
+        renewal:(s.nextPayment||'').slice(0,10)||plusDays(30),
+        status: raw==='active'?'Active' : (raw==='canceled'||raw==='cancelled'||raw==='expired')?'Canceled' : raw==='past_due'?'Past due' : cap(raw)};
+    });
+    DB.subscriptions = [...mappedSubs, ...localSubs];
+  }
   /* purge records pointing at accounts that no longer exist (demo data) */
   ['quotes','invoices','subscriptions','billables','notes','tasks'].forEach(k=>{
     DB[k] = DB[k].filter(x=>!x.accountId || DB.accounts.some(a=>a.id===x.accountId));
   });
+  const c = j.counts||{};
   DB.activities = [{when:nowIso(),who:'tm',type:'note',
-    text:`<b>HubSpot import</b> — ${DB.accounts.length} accounts, ${DB.contacts.length} contacts, ${DB.deals.length} deals, ${(j.owners||[]).length} team members`}];
+    text:`<b>HubSpot import</b> — ${DB.accounts.length} accounts, ${DB.contacts.length} contacts, ${DB.deals.length} deals, ${c.invoices||0} invoices, ${DB.payments.length} payments, ${c.subscriptions||0} subscriptions, ${(j.owners||[]).length} team members`}];
   state.dealFilter='open';
   render();
-  toast(`✅ Imported ${DB.accounts.length} accounts, ${DB.contacts.length} contacts, ${DB.deals.length} deals from HubSpot`);
+  toast(`✅ Imported ${DB.accounts.length} accounts, ${DB.contacts.length} contacts, ${DB.deals.length} deals, ${DB.payments.length} payments from HubSpot`);
 }
 
 /* ---------------- Boot ---------------- */
