@@ -1497,7 +1497,7 @@ function quoteItemsHtml(q){
     <table>
       <thead><tr><th>Description</th><th class="num">Qty</th><th class="num">Unit price</th>${hasDisc?'<th class="num">Disc.</th>':''}<th class="num">Amount</th></tr></thead>
       <tbody>${items.map(i=>`<tr>
-        <td>${esc(i.desc)}</td><td class="num">${i.qty}</td>
+        <td style="font-weight:600;color:var(--text-1)">${esc(i.desc)}</td><td class="num">${i.qty}</td>
         <td class="num">${money2(i.price)}${per?'<span class="permo">/mo</span>':''}</td>
         ${hasDisc?`<td class="num">${(i.discountVal||0)>0?`<span class="pill pill-green" style="font-size:11px;padding:1px 8px">${discLbl(i)}</span>`:'<span class="muted">—</span>'}</td>`:''}
         <td class="num" style="font-weight:600">${(i.discountVal||0)>0?`<span class="muted" style="text-decoration:line-through;font-weight:400;font-size:12px;margin-right:6px">${money2(i.qty*i.price)}</span>`:''}${money2(liNet(i))}${per?'<span class="permo">/mo</span>':''}</td>
@@ -1513,8 +1513,7 @@ function quoteTotalsHtml(q){
     ${t.onceSub?`<div class="row"><span>One-time subtotal</span><b>${money2(t.onceSub)}</b></div>`:''}
     ${t.disc?`<div class="row"><span>Additional discount${q.discountType!=='amt'&&q.discountVal?` (${q.discountVal}%)`:''}</span><b>−${money2(t.disc)}</b></div>`:''}
     ${t.tax?`<div class="row"><span>Tax (${q.taxPct}%)</span><b>${money2(t.tax)}</b></div>`:''}
-    ${t.monthly?`<div class="row"><span>Ongoing monthly total</span><b>${money2(t.monthly)}/mo</b></div>`:''}
-    <div class="row grand"><span>Due at signing${t.monthly?' (first month + one-time)':''}</span><b>${money2(t.total)}</b></div>
+    <div class="row grand"><span>${q.dueAtSigning===false?'Total':'Due at signing'}${t.monthly?' (first month + one-time)':''}</span><b>${money2(t.total)}</b></div>
   </div>`;
 }
 
@@ -1566,8 +1565,7 @@ function openQuotePreview(qid){
     <div class="qdoc">
       <div class="qd-top">
         <div>
-          <h3>Launch</h3>
-          <div class="qd-num">${q.number} · Prepared for <b>${esc(a.name)}</b></div>
+          <div class="qd-num" style="font-size:14.5px">${q.number} · Prepared for <b style="color:var(--text-1)">${esc(a.name)}</b></div>
           <div class="qd-num">Created ${fmtDateFull(q.created)} · Valid until ${fmtDateFull(q.validUntil)}</div>
         </div>
       </div>
@@ -1776,6 +1774,9 @@ function openTemplateEdit(){
       <div class="field"><label for="f-q-tax">Default tax %</label>
         <input id="f-q-tax" type="number" min="0" max="100" value="${tpl.taxPct||0}" oninput="refreshQuoteTotals()"></div>
     </div>
+    <div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:500">
+      <input type="checkbox" id="f-q-dueatsign" ${tpl.dueAtSigning===false?'':'checked'} style="width:auto" onchange="refreshQuoteTotals()"> Total is due at signing by default
+      </label></div>
     <div class="field"><label for="f-q-notes">Default notes to client</label>
       <textarea id="f-q-notes" placeholder="Standard language that should appear on every quote…">${esc(tpl.notes||'')}</textarea></div>
     <div class="quote-totals" id="q-totals"></div>
@@ -1794,6 +1795,7 @@ function saveTemplate(){
     discountType: $('#f-q-disctype').value,
     discountVal: parseFloat($('#f-q-disc').value)||0,
     taxPct: parseFloat($('#f-q-tax').value)||0,
+    dueAtSigning: $('#f-q-dueatsign').checked,
   };
   qTplMode = false;
   closeModal(); toast('Template saved — new quotes start from it');
@@ -1924,7 +1926,7 @@ function invoiceUnbilled(acctId){
 function quotePayload(q){
   const a = acct(q.accountId);
   return {id:q.id,number:q.number,title:q.title,account:a?a.name:'',status:q.status,created:q.created,
-    validUntil:q.validUntil,discountType:q.discountType,discountVal:q.discountVal,taxPct:q.taxPct,items:q.items,notes:q.notes||'',signerName:q.signerName||null,signed:q.signed||null,signature:q.signature||null};
+    validUntil:q.validUntil,discountType:q.discountType,discountVal:q.discountVal,taxPct:q.taxPct,dueAtSigning:q.dueAtSigning,items:q.items,notes:q.notes||'',signerName:q.signerName||null,signed:q.signed||null,signature:q.signature||null};
 }
 function buildClientLink(q){
   if(window.CLOUD_ON){
@@ -1965,7 +1967,7 @@ function openClientView(qid){
 let _clientPayload = null;
 function renderClientView(p,{live=false}={}){
   _clientPayload = p;
-  const q = {items:p.items,discountType:p.discountType,discountVal:p.discountVal,taxPct:p.taxPct,number:p.number,title:p.title};
+  const q = {items:p.items,discountType:p.discountType,discountVal:p.discountVal,taxPct:p.taxPct,dueAtSigning:p.dueAtSigning,number:p.number,title:p.title};
   const t = quoteTotal(q);
   const signed = p.status==='Signed';
   const el = document.createElement('div');
@@ -1973,14 +1975,14 @@ function renderClientView(p,{live=false}={}){
   el.innerHTML = `
   <div class="client-bar">
     <div class="brand-mark">L</div>
-    <div><div style="font-weight:700;font-size:14px">Launch</div><div style="font-size:12px;color:var(--muted)">Quote ${esc(p.number)}</div></div>
+    <div><div style="font-size:12.5px;color:var(--muted)">Quote ${esc(p.number)}</div></div>
     <span class="note-tag">${icon('linkIcon',13)} ${live?'Preview of what your client sees':'Secure quote link'}</span>
     ${live?`<button class="btn btn-secondary btn-sm" onclick="closeClientView()">${icon('arrowLeft',13)} Back to CRM</button>`:''}
   </div>
   <div class="client-wrap">
     <div class="client-hero">
       <h2>${esc(p.title)}</h2>
-      <p>Prepared for <b>${esc(p.account)}</b> · ${fmtDateFull(p.created)} · Valid until <b>${fmtDateFull(p.validUntil)}</b></p>
+      <p style="font-size:15.5px">Prepared for <b>${esc(p.account)}</b> · ${fmtDateFull(p.created)} · Valid until <b>${fmtDateFull(p.validUntil)}</b></p>
     </div>
     <div class="qdoc" style="box-shadow:var(--shadow-md)">
       <div class="qd-top">
@@ -2986,9 +2988,10 @@ function openQuoteEdit(qid){
 }
 function modalQuote(acctId){
   const eq = qEditId? DB.quotes.find(x=>x.id===qEditId) : null;
-  const tpl = (!eq && DB.quoteTemplate && DB.quoteTemplate.items && DB.quoteTemplate.items.length)? DB.quoteTemplate : null;
+  const tpl = (!eq && DB.quoteTemplate)? DB.quoteTemplate : null;
+  const tplItems = tpl && tpl.items && tpl.items.length;
   qItems = eq? JSON.parse(JSON.stringify(eq.items))
-    : tpl? JSON.parse(JSON.stringify(tpl.items))
+    : tplItems? JSON.parse(JSON.stringify(tpl.items))
     : [{desc:'',qty:1,price:0,billing:'once'}];
   return `
   <div class="modal-head"><h2>${eq?`Edit quote <span class="muted" style="font-weight:500;font-size:13px">${eq.number}</span>`:'Create quote'}</h2>${eq?statusPill(eq.status):''}<button class="x" onclick="closeModal()" aria-label="Close">${icon('x',16)}</button></div>
@@ -3002,7 +3005,7 @@ function modalQuote(acctId){
     </div>
     <div class="field"><label for="f-q-title">Quote title <span class="req">*</span></label>
       <input id="f-q-title" type="text" placeholder="e.g. Platform rollout — Year 1" value="${eq?esc(eq.title):''}"><span class="err"></span></div>
-    <div class="field"><label>Line items ${tpl?'<span class="muted" style="font-weight:400">— started from your template</span>':''}</label>
+    <div class="field"><label>Line items ${tplItems?'<span class="muted" style="font-weight:400">— started from your template</span>':''}</label>
       <div class="li-table" id="li-table"></div>
       <select class="btn btn-secondary btn-sm" style="width:auto;display:inline-block;margin-right:6px" onchange="qAddFromCatalog(this)" aria-label="Add item from catalog">
         <option value="">➕ Add from catalog…</option>${catalogOptions()}
@@ -3023,6 +3026,9 @@ function modalQuote(acctId){
       <div class="field"><label for="f-q-tax">Tax %</label>
         <input id="f-q-tax" type="number" min="0" max="100" value="${(eq||tpl||{}).taxPct||0}" oninput="refreshQuoteTotals()"></div>
     </div>
+    <div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:500">
+      <input type="checkbox" id="f-q-dueatsign" ${(eq||tpl||{}).dueAtSigning===false?'':'checked'} style="width:auto" onchange="refreshQuoteTotals()"> Total is due at signing
+      </label><div class="help">Checked: the quote's bottom line reads "Due at signing". Unchecked: it reads "Total" — use this when you'll invoice after acceptance instead.</div></div>
     <div class="field"><label for="f-q-notes">Notes to client <span class="muted" style="font-weight:400">(optional)</span></label>
       <textarea id="f-q-notes" placeholder="Anything the client should know — scheduling, assumptions, context for the pricing…">${esc((eq||tpl||{}).notes||'')}</textarea>
       <div class="help">Shown on the quote document and the client's signing page.</div></div>
@@ -3074,8 +3080,7 @@ function refreshQuoteTotals(){
     ${t.onceSub?`<div class="row"><span>One-time subtotal</span><b>${money2(t.onceSub)}</b></div>`:''}
     ${t.disc?`<div class="row"><span>Additional discount</span><b>−${money2(t.disc)}</b></div>`:''}
     ${t.tax?`<div class="row"><span>Tax</span><b>${money2(t.tax)}</b></div>`:''}
-    ${t.monthly?`<div class="row"><span>Ongoing monthly</span><b>${money2(t.monthly)}/mo</b></div>`:''}
-    <div class="row grand"><span>Due at signing</span><b>${money2(t.total)}</b></div>`;
+    <div class="row grand"><span>${($('#f-q-dueatsign')&&!$('#f-q-dueatsign').checked)?'Total':'Due at signing'}</span><b>${money2(t.total)}</b></div>`;
 }
 function saveQuote(status){
   const title = $('#f-q-title').value.trim();
@@ -3090,7 +3095,8 @@ function saveQuote(status){
       validUntil:$('#f-q-valid').value||q.validUntil,
       discountType:$('#f-q-disctype').value,
       discountVal:parseFloat($('#f-q-disc').value)||0,
-      taxPct:parseFloat($('#f-q-tax').value)||0});
+      taxPct:parseFloat($('#f-q-tax').value)||0,
+      dueAtSigning:$('#f-q-dueatsign').checked});
     logEvent(q,'Quote edited by Tyler Moore');
     if(status==='Sent' && q.status==='Draft'){ q.status='Sent'; logEvent(q,'Sent to client — secure link generated'); }
     const qid = qEditId; qEditId = null;
@@ -3100,7 +3106,8 @@ function saveQuote(status){
   }
   const num = 'Q-2026-0' + (42 + DB.quotes.filter(q=>q.number.startsWith('Q-2026')).length - 5);
   const q = {id:uid('q'),number:num,accountId:acctId,title,status,created:todayStr(),validUntil:$('#f-q-valid').value||plusDays(30),
-    discountType:$('#f-q-disctype').value,discountVal:parseFloat($('#f-q-disc').value)||0,taxPct:parseFloat($('#f-q-tax').value)||0,items,notes,
+    discountType:$('#f-q-disctype').value,discountVal:parseFloat($('#f-q-disc').value)||0,taxPct:parseFloat($('#f-q-tax').value)||0,
+    dueAtSigning:$('#f-q-dueatsign').checked,items,notes,
     events:[{ts:nowIso(),label:'Quote created',by:'Tyler Moore'}]};
   if(status==='Sent') q.events.push({ts:nowIso(),label:'Sent to client — secure link generated',by:'Tyler Moore'});
   DB.quotes.unshift(q);
