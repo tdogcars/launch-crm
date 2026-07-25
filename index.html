@@ -600,6 +600,7 @@ const ICONS = {
   linkIcon:'<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
   formIcon:'<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 8h10"/><path d="M7 12h10"/><path d="M7 16h6"/>',
   todo:'<rect x="3" y="5" width="6" height="6" rx="1"/><path d="m3 17 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>',
+  box:'<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
   wf:'<rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/>',
   bell:'<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   flag:'<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" x2="4" y1="22" y2="15"/>',
@@ -709,6 +710,13 @@ const DB = {
     {id:'i7',number:'INV-2026-112',accountId:'a6',amount:2300,issued:'2026-06-15',due:'2026-07-15',status:'Overdue',memo:'Onboarding services'},
   ],
   payments:[],
+  products:[
+    {id:'pr1',name:'POS software license',desc:'Per-location SaaS license',type:'monthly',price:149,active:true},
+    {id:'pr2',name:'Premium support plan',desc:'Priority phone & after-hours support',type:'monthly',price:49,active:true},
+    {id:'pr3',name:'POS terminal (hardware)',desc:'Touchscreen terminal, card reader & cash drawer',type:'once',price:1299,active:true},
+    {id:'pr4',name:'Installation & onboarding',desc:'On-site setup, menu build & staff training',type:'once',price:499,active:true},
+  ],
+  quoteTemplate:{items:[],notes:'',discountType:'pct',discountVal:0,taxPct:0},
   billables:[
     {id:'b1',accountId:'a1',desc:'Custom API integration work',type:'Hours',qty:12,rate:165,date:'2026-07-17',status:'Unbilled'},
     {id:'b2',accountId:'a3',desc:'On-site training day — Boise HQ',type:'Service',qty:1,rate:1800,date:'2026-07-14',status:'Unbilled'},
@@ -924,6 +932,9 @@ function statusPill(status){
     'Canceled':['pill-gray', 'x'],
     'Unbilled':['pill-amber','clock'],
     'Invoiced':['pill-green','checkCircle'],
+    'Inactive':['pill-gray','x'],
+    'Monthly': ['pill-blue','repeat'],
+    'One-time':['pill-gray','receipt'],
     'Succeeded':['pill-green','checkCircle'],
     'Processing':['pill-amber','clock'],
     'Refunded':['pill-gray','repeat'],
@@ -955,6 +966,7 @@ const NAV = [
   {id:'forms',     label:'Forms',     icon:'formIcon', count:()=>DB.forms.length},
   {group:'Revenue'},
   {id:'quotes',    label:'Quotes',    icon:'fileText', count:()=>DB.quotes.filter(q=>['Draft','Sent'].includes(q.status)).length},
+  {id:'products',  label:'Products',  icon:'box', count:()=>DB.products.filter(p=>p.active).length},
   {id:'invoices',  label:'Invoices',  icon:'receipt', count:()=>DB.invoices.filter(i=>i.status!=='Paid').length},
   {id:'payments',  label:'Payments',  icon:'creditCard', count:()=>DB.payments.length},
   {id:'subscriptions', label:'Subscriptions', icon:'repeat'},
@@ -997,6 +1009,7 @@ function render(){
   else if(v==='forms') el.innerHTML = viewForms();
   else if(v==='formBuilder') el.innerHTML = viewFormBuilder();
   else if(v==='quotes') el.innerHTML = viewQuotes();
+  else if(v==='products') el.innerHTML = viewProducts();
   else if(v==='invoices') el.innerHTML = viewInvoices();
   else if(v==='payments') el.innerHTML = viewPayments();
   else if(v==='subscriptions') el.innerHTML = viewSubscriptions();
@@ -1460,7 +1473,10 @@ function viewQuotes(){
   return `
   <div class="page-head">
     <div><h1>Quotes</h1><div class="sub">${sent.length} awaiting signature · ${money(sent.reduce((s,q)=>s+quoteTotal(q).total,0))} outstanding.</div></div>
-    <div class="actions"><button class="btn btn-primary" onclick="openModal('quote')">${icon('plus',15)} Create quote</button></div>
+    <div class="actions">
+      <button class="btn btn-secondary" onclick="openTemplateEdit()">${icon('fileText',15)} Quote template</button>
+      <button class="btn btn-primary" onclick="openModal('quote')">${icon('plus',15)} Create quote</button>
+    </div>
   </div>
   <div class="filters">
     <div class="seg" role="group" aria-label="Filter quotes by status">
@@ -1627,6 +1643,160 @@ function quoteToInvoice(qid){
   closeModal(); toast(`Invoice ${num} created from ${q.number}`);
   nav('account',q.accountId); setAcctTab('billing');
   if(window.CLOUD_ON && qbConnected) qbCreateInvoice(newInv.id);
+}
+
+/* ---------------- Product catalog ---------------- */
+function viewProducts(){
+  const rows = [...DB.products].sort((a,b)=>(a.type>b.type?1:a.type<b.type?-1:0)||a.name.localeCompare(b.name));
+  const mrr = DB.products.filter(p=>p.active&&p.type==='monthly').length;
+  return `
+  <div class="page-head">
+    <div><h1>Products</h1><div class="sub">Your catalog — pick these when building a quote. ${mrr} monthly item${mrr!==1?'s':''}, ${DB.products.filter(p=>p.active&&p.type==='once').length} one-time.</div></div>
+    <div class="actions">
+      <button class="btn btn-secondary" onclick="openTemplateEdit()">${icon('fileText',15)} Quote template</button>
+      <button class="btn btn-primary" onclick="openModal('product')">${icon('plus',15)} New product</button>
+    </div>
+  </div>
+  <div class="card">
+    ${rows.length? `<div class="table-wrap"><table class="tbl">
+      <thead><tr><th>Product</th><th>Billing</th><th class="num">Price</th><th>Status</th><th></th></tr></thead>
+      <tbody>${rows.map(p=>`<tr style="${p.active?'':'opacity:.55'}">
+        <td><div class="cell-main">${esc(p.name)}</div>${p.desc?`<div class="cell-sub">${esc(p.desc)}</div>`:''}</td>
+        <td>${statusPill(p.type==='monthly'?'Monthly':'One-time')}</td>
+        <td class="num" style="font-weight:600">${money2(p.price)}${p.type==='monthly'?'<span class="permo">/mo</span>':''}</td>
+        <td>${statusPill(p.active?'Active':'Inactive')}</td>
+        <td style="white-space:nowrap">
+          <button class="btn btn-secondary btn-sm" onclick="openModal('product','${p.id}')">${icon('pen',13)} Edit</button>
+          <button class="btn btn-ghost btn-sm" onclick="toggleProduct('${p.id}')">${p.active?'Deactivate':'Activate'}</button>
+        </td>
+      </tr>`).join('')}</tbody></table></div>`
+    : `<div class="empty"><div class="eicon">${icon('box',18)}</div><h4>No products yet</h4><p>Add your monthly plans and one-time charges so quoting is one click.</p><button class="btn btn-primary btn-sm" onclick="openModal('product')">${icon('plus',13)} New product</button></div>`}
+  </div>`;
+}
+function modalProduct(prodId){
+  const p = prodId? DB.products.find(x=>x.id===prodId) : null;
+  return `
+  <div class="modal-head"><h2>${p?'Edit product':'New product'}</h2><button class="x" onclick="closeModal()" aria-label="Close">${icon('x',16)}</button></div>
+  <div class="modal-body">
+    <div class="field"><label for="f-pr-name">Product name <span class="req">*</span></label>
+      <input id="f-pr-name" type="text" placeholder="e.g. POS software license" value="${p?esc(p.name):''}"><span class="err"></span></div>
+    <div class="field"><label for="f-pr-desc">Description <span class="muted" style="font-weight:400">(optional)</span></label>
+      <input id="f-pr-desc" type="text" placeholder="Shown under the name in your catalog" value="${p?esc(p.desc||''):''}"></div>
+    <div class="field-row">
+      <div class="field"><label for="f-pr-type">Billing</label>
+        <select id="f-pr-type">
+          <option value="monthly" ${p&&p.type==='monthly'?'selected':''}>Monthly</option>
+          <option value="once" ${!p||p.type!=='monthly'?'selected':''}>One-time</option>
+        </select></div>
+      <div class="field"><label for="f-pr-price">Price <span class="req">*</span></label>
+        <input id="f-pr-price" type="number" min="0" step="0.01" placeholder="0.00" value="${p?p.price:''}"><span class="err"></span></div>
+    </div>
+    ${p?`<div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="f-pr-active" ${p.active?'checked':''} style="width:auto"> Active — show in the quote builder catalog</label></div>`:''}
+  </div>
+  <div class="modal-foot">
+    ${p?`<button class="btn btn-ghost" style="color:var(--danger)" onclick="deleteProduct('${p.id}')">${icon('trash',14)} Delete</button><span class="spacer"></span>`:''}
+    <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveProduct(${p?`'${p.id}'`:'null'})">${icon('check',14)} ${p?'Save changes':'Add product'}</button>
+  </div>`;
+}
+function saveProduct(prodId){
+  const name = $('#f-pr-name').value.trim();
+  if(fieldError('f-pr-name','Name the product.',!name)) return;
+  const price = parseFloat($('#f-pr-price').value);
+  if(fieldError('f-pr-price','Set a price.',isNaN(price)||price<0)) return;
+  const data = {name, desc:$('#f-pr-desc').value.trim(), type:$('#f-pr-type').value, price};
+  if(prodId){
+    const p = DB.products.find(x=>x.id===prodId);
+    Object.assign(p, data, {active: $('#f-pr-active')? $('#f-pr-active').checked : p.active});
+    toast('Product updated');
+  } else {
+    DB.products.unshift({id:uid('pr'), ...data, active:true});
+    toast(`${name} added to your catalog`);
+  }
+  closeModal(); if(state.view==='products') render();
+}
+function toggleProduct(prodId){
+  const p = DB.products.find(x=>x.id===prodId);
+  p.active = !p.active; render();
+  toast(p.active? `${p.name} activated` : `${p.name} hidden from the quote builder`);
+}
+function deleteProduct(prodId){
+  const p = DB.products.find(x=>x.id===prodId);
+  if(!confirm(`Delete "${p.name}" from the catalog?\n\nExisting quotes keep their line items — this only removes it from the picker.`)) return;
+  DB.products = DB.products.filter(x=>x.id!==prodId);
+  closeModal(); render(); toast('Product deleted');
+}
+function catalogOptions(){
+  const act = DB.products.filter(p=>p.active);
+  const group = (label,type)=>{
+    const items = act.filter(p=>p.type===type);
+    return items.length? `<optgroup label="${label}">${items.map(p=>`<option value="${p.id}">${esc(p.name)} — ${money2(p.price)}${p.type==='monthly'?'/mo':''}</option>`).join('')}</optgroup>`:'';
+  };
+  return group('Monthly','monthly')+group('One-time','once');
+}
+function qAddFromCatalog(sel){
+  const p = DB.products.find(x=>x.id===sel.value);
+  sel.value='';
+  if(!p) return;
+  const empty = qItems.findIndex(i=>!i.desc.trim() && !i.price);
+  const line = {desc:p.name, qty:1, price:p.price, billing:p.type==='monthly'?'monthly':'once', productId:p.id};
+  if(empty>-1) qItems[empty] = line; else qItems.push(line);
+  renderLineItems();
+}
+
+/* ---------------- Quote template ---------------- */
+let qTplMode = false;
+function openTemplateEdit(){
+  qTplMode = true; qEditId = null;
+  const tpl = DB.quoteTemplate||{};
+  qItems = tpl.items&&tpl.items.length? JSON.parse(JSON.stringify(tpl.items)) : [{desc:'',qty:1,price:0,billing:'once'}];
+  const modal = $('#modal');
+  modal.className = 'modal wide';
+  modal.innerHTML = `
+  <div class="modal-head"><h2>Base quote template</h2><button class="x" onclick="qTplMode=false;closeModal()" aria-label="Close">${icon('x',16)}</button></div>
+  <div class="modal-body">
+    <p style="font-size:13px;color:var(--text-2);margin-bottom:12px">Every new quote starts pre-filled with these line items, notes, discount and tax — then you edit it per client. Leave it empty to start quotes from scratch.</p>
+    <div class="field"><label>Line items</label>
+      <div class="li-table" id="li-table"></div>
+      <select class="btn btn-secondary btn-sm" style="width:auto;display:inline-block;margin-right:6px" onchange="qAddFromCatalog(this)" aria-label="Add from catalog">
+        <option value="">${'➕'} Add from catalog…</option>${catalogOptions()}
+      </select>
+      <button class="btn btn-secondary btn-sm" onclick="qItems.push({desc:'',qty:1,price:0,billing:'once'});renderLineItems()">${icon('plus',13)} Custom one-time item</button>
+      <button class="btn btn-secondary btn-sm" onclick="qItems.push({desc:'',qty:1,price:0,billing:'monthly'});renderLineItems()">${icon('repeat',13)} Custom monthly item</button>
+    </div>
+    <div class="field-row">
+      <div class="field"><label for="f-q-disc">Default discount</label>
+        <div style="display:flex;gap:8px">
+          <select id="f-q-disctype" style="flex:0 0 72px" onchange="refreshQuoteTotals()" aria-label="Discount type">
+            <option value="pct" ${(tpl.discountType!=='amt')?'selected':''}>%</option>
+            <option value="amt" ${tpl.discountType==='amt'?'selected':''}>$</option>
+          </select>
+          <input id="f-q-disc" type="number" min="0" value="${tpl.discountVal||0}" oninput="refreshQuoteTotals()" aria-label="Discount value">
+        </div></div>
+      <div class="field"><label for="f-q-tax">Default tax %</label>
+        <input id="f-q-tax" type="number" min="0" max="100" value="${tpl.taxPct||0}" oninput="refreshQuoteTotals()"></div>
+    </div>
+    <div class="field"><label for="f-q-notes">Default notes to client</label>
+      <textarea id="f-q-notes" placeholder="Standard language that should appear on every quote…">${esc(tpl.notes||'')}</textarea></div>
+    <div class="quote-totals" id="q-totals"></div>
+  </div>
+  <div class="modal-foot">
+    <button class="btn btn-secondary" onclick="qTplMode=false;closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveTemplate()">${icon('check',14)} Save template</button>
+  </div>`;
+  renderLineItems();
+  showModal();
+}
+function saveTemplate(){
+  DB.quoteTemplate = {
+    items: qItems.filter(i=>i.desc.trim() && i.qty>0),
+    notes: $('#f-q-notes').value.trim(),
+    discountType: $('#f-q-disctype').value,
+    discountVal: parseFloat($('#f-q-disc').value)||0,
+    taxPct: parseFloat($('#f-q-tax').value)||0,
+  };
+  qTplMode = false;
+  closeModal(); toast('Template saved — new quotes start from it');
 }
 
 /* ---------------- Invoices / Subscriptions / Billables ---------------- */
@@ -2506,7 +2676,8 @@ function openModal(kind,acctId=null){
   else if(kind==='account') modal.innerHTML = modalAccount();
   else if(kind==='note') modal.innerHTML = modalNote(acctId);
   else if(kind==='billable') modal.innerHTML = modalBillable(acctId);
-  else if(kind==='quote'){ qEditId=null; modal.innerHTML = modalQuote(acctId); refreshQuoteTotals(); }
+  else if(kind==='quote'){ qEditId=null; qTplMode=false; modal.innerHTML = modalQuote(acctId); refreshQuoteTotals(); }
+  else if(kind==='product') modal.innerHTML = modalProduct(acctId);
   else if(kind==='stages'){ modal.innerHTML = modalStages(); renderStageRows(); }
   else if(kind==='task') modal.innerHTML = modalTask(acctId);
   showModal();
@@ -2815,7 +2986,10 @@ function openQuoteEdit(qid){
 }
 function modalQuote(acctId){
   const eq = qEditId? DB.quotes.find(x=>x.id===qEditId) : null;
-  qItems = eq? JSON.parse(JSON.stringify(eq.items)) : [{desc:'',qty:1,price:0,billing:'once'}];
+  const tpl = (!eq && DB.quoteTemplate && DB.quoteTemplate.items && DB.quoteTemplate.items.length)? DB.quoteTemplate : null;
+  qItems = eq? JSON.parse(JSON.stringify(eq.items))
+    : tpl? JSON.parse(JSON.stringify(tpl.items))
+    : [{desc:'',qty:1,price:0,billing:'once'}];
   return `
   <div class="modal-head"><h2>${eq?`Edit quote <span class="muted" style="font-weight:500;font-size:13px">${eq.number}</span>`:'Create quote'}</h2>${eq?statusPill(eq.status):''}<button class="x" onclick="closeModal()" aria-label="Close">${icon('x',16)}</button></div>
   <div class="modal-body">
@@ -2828,25 +3002,29 @@ function modalQuote(acctId){
     </div>
     <div class="field"><label for="f-q-title">Quote title <span class="req">*</span></label>
       <input id="f-q-title" type="text" placeholder="e.g. Platform rollout — Year 1" value="${eq?esc(eq.title):''}"><span class="err"></span></div>
-    <div class="field"><label>Line items</label>
+    <div class="field"><label>Line items ${tpl?'<span class="muted" style="font-weight:400">— started from your template</span>':''}</label>
       <div class="li-table" id="li-table"></div>
-      <button class="btn btn-secondary btn-sm" onclick="qItems.push({desc:'',qty:1,price:0,billing:'once'});renderLineItems()">${icon('plus',13)} Add one-time item</button>
-      <button class="btn btn-secondary btn-sm" onclick="qItems.push({desc:'',qty:1,price:0,billing:'monthly'});renderLineItems()">${icon('repeat',13)} Add monthly item</button>
+      <select class="btn btn-secondary btn-sm" style="width:auto;display:inline-block;margin-right:6px" onchange="qAddFromCatalog(this)" aria-label="Add item from catalog">
+        <option value="">➕ Add from catalog…</option>${catalogOptions()}
+      </select>
+      <button class="btn btn-secondary btn-sm" onclick="qItems.push({desc:'',qty:1,price:0,billing:'once'});renderLineItems()">${icon('plus',13)} Custom one-time item</button>
+      <button class="btn btn-secondary btn-sm" onclick="qItems.push({desc:'',qty:1,price:0,billing:'monthly'});renderLineItems()">${icon('repeat',13)} Custom monthly item</button>
+      <div class="help">Pick from your catalog or type anything — every line stays editable either way.</div>
     </div>
     <div class="field-row">
       <div class="field"><label for="f-q-disc">Additional discount</label>
         <div style="display:flex;gap:8px">
           <select id="f-q-disctype" style="flex:0 0 72px" onchange="refreshQuoteTotals()" aria-label="Discount type">
-            <option value="pct" ${(!eq||eq.discountType!=='amt')?'selected':''}>%</option>
-            <option value="amt" ${eq&&eq.discountType==='amt'?'selected':''}>$</option>
+            <option value="pct" ${((eq||tpl||{}).discountType!=='amt')?'selected':''}>%</option>
+            <option value="amt" ${(eq||tpl||{}).discountType==='amt'?'selected':''}>$</option>
           </select>
-          <input id="f-q-disc" type="number" min="0" value="${eq?eq.discountVal||0:0}" oninput="refreshQuoteTotals()" aria-label="Discount value">
+          <input id="f-q-disc" type="number" min="0" value="${(eq||tpl||{}).discountVal||0}" oninput="refreshQuoteTotals()" aria-label="Discount value">
         </div></div>
       <div class="field"><label for="f-q-tax">Tax %</label>
-        <input id="f-q-tax" type="number" min="0" max="100" value="${eq?eq.taxPct||0:0}" oninput="refreshQuoteTotals()"></div>
+        <input id="f-q-tax" type="number" min="0" max="100" value="${(eq||tpl||{}).taxPct||0}" oninput="refreshQuoteTotals()"></div>
     </div>
     <div class="field"><label for="f-q-notes">Notes to client <span class="muted" style="font-weight:400">(optional)</span></label>
-      <textarea id="f-q-notes" placeholder="Anything the client should know — scheduling, assumptions, context for the pricing…">${eq?esc(eq.notes||''):''}</textarea>
+      <textarea id="f-q-notes" placeholder="Anything the client should know — scheduling, assumptions, context for the pricing…">${esc((eq||tpl||{}).notes||'')}</textarea>
       <div class="help">Shown on the quote document and the client's signing page.</div></div>
     <div class="quote-totals" id="q-totals"></div>
   </div>
@@ -2963,7 +3141,7 @@ window.PUBLIC_TOKEN = null;
 window.sbClient = null;
 let cloudUser = null;
 const CLIENT_ID = uid('c');
-const SYNC_KEYS = ['accounts','contacts','deals','quotes','subscriptions','invoices','payments','billables','notes','tasks','forms','workflows','activities','team'];
+const SYNC_KEYS = ['accounts','contacts','deals','quotes','subscriptions','invoices','payments','billables','notes','tasks','forms','workflows','activities','team','products','quoteTemplate'];
 const _hashes = {};
 const jhash = o => { const s=JSON.stringify(o); let h=5381; for(let i=0;i<s.length;i++) h=(((h<<5)+h)^s.charCodeAt(i))>>>0; return h; };
 const snapshot = k => k==='stages'? STAGES : k==='team'? TEAM : DB[k];
