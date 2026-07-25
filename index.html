@@ -3006,22 +3006,44 @@ function showGate(html){
   g.innerHTML=html; g.style.display='flex';
 }
 function hideGate(){ const g=$('#gate'); if(g) g.style.display='none'; }
-function showLogin(msg){
+function showLogin(msg,{signup=false,email=''}={}){
   showGate(`<div class="gate-card">
     <div class="brand-mark">L</div><h1>Launch CRM</h1>
-    <p>${msg||"Sign in with your work email — we'll send you a one-tap sign-in link."}</p>
-    <input id="login-email" type="email" placeholder="you@company.com" autocomplete="email" onkeydown="if(event.key==='Enter')sendMagicLink()">
-    <button class="btn btn-primary" onclick="sendMagicLink()">${icon('mail',15)} Email me a sign-in link</button>
+    <p style="${msg&&/failed|Could not|error|Invalid/i.test(msg)?'color:var(--danger)':''}">${msg||(signup?'Create your team account — pick a password you\'ll use from now on.':'Sign in with your email and password.')}</p>
+    <input id="login-email" type="email" placeholder="you@company.com" autocomplete="email" value="${esc(email)}">
+    <input id="login-pw" type="password" placeholder="${signup?'Choose a password (8+ characters)':'Password'}" autocomplete="${signup?'new-password':'current-password'}" onkeydown="if(event.key==='Enter')${signup?'pwSignUp()':'pwSignIn()'}">
+    <button class="btn btn-primary" onclick="${signup?'pwSignUp()':'pwSignIn()'}">${signup?icon('plus',15)+' Create account':icon('check',15)+' Sign in'}</button>
+    <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="showLogin(null,{signup:${!signup},email:$('#login-email').value})">${signup?'Have an account? Sign in':'First time here? Create your account'}</button>
+    <button class="btn btn-ghost btn-sm" style="width:100%;margin-top:4px;color:var(--muted)" onclick="sendMagicLink()">${icon('mail',13)} Forgot password? Email me a sign-in link</button>
     <div class="gate-note">Team access is managed in Supabase → Authentication → Users.</div>
   </div>`);
-  setTimeout(()=>{ const e=$('#login-email'); if(e) e.focus(); },100);
+  setTimeout(()=>{ const e=$('#login-email'); if(e&&!e.value) e.focus(); else if($('#login-pw')) $('#login-pw').focus(); },100);
+}
+function loginVals(){
+  const email=$('#login-email').value.trim(), pw=$('#login-pw')?$('#login-pw').value:'';
+  if(!email||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ $('#login-email').style.borderColor='var(--danger)'; $('#login-email').focus(); return null; }
+  return {email,pw};
+}
+async function pwSignIn(){
+  const v=loginVals(); if(!v) return;
+  if(!v.pw){ $('#login-pw').style.borderColor='var(--danger)'; $('#login-pw').focus(); return; }
+  const {error} = await window.sbClient.auth.signInWithPassword({email:v.email,password:v.pw});
+  if(error) showLogin('Sign-in failed: '+esc(error.message),{email:v.email});
+  /* success → onAuthStateChange reloads into the app */
+}
+async function pwSignUp(){
+  const v=loginVals(); if(!v) return;
+  if(!v.pw||v.pw.length<8){ $('#login-pw').style.borderColor='var(--danger)'; $('#login-pw').focus(); return; }
+  const {data,error} = await window.sbClient.auth.signUp({email:v.email,password:v.pw});
+  if(error){ showLogin('Could not create the account: '+esc(error.message),{signup:true,email:v.email}); return; }
+  if(!data.session) showGate(`<div class="gate-card"><div class="brand-mark">L</div><h1>Confirm your email</h1><p>We sent a confirmation link to <b>${esc(v.email)}</b> — click it once and you're in. (To skip this step for future teammates, disable "Confirm email" in Supabase → Authentication → Sign In / Providers.)</p></div>`);
+  /* with confirmation disabled, a session is returned and onAuthStateChange reloads */
 }
 async function sendMagicLink(){
-  const email=$('#login-email').value.trim();
-  if(!email||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){ $('#login-email').focus(); $('#login-email').style.borderColor='var(--danger)'; return; }
-  const {error} = await window.sbClient.auth.signInWithOtp({email,options:{emailRedirectTo:location.origin+location.pathname}});
-  if(error) showLogin('Could not send the link: '+esc(error.message));
-  else showGate(`<div class="gate-card"><div class="brand-mark">L</div><h1>Check your email</h1><p>We sent a sign-in link to <b>${esc(email)}</b>. Open it on this device to continue.</p></div>`);
+  const v=loginVals(); if(!v) return;
+  const {error} = await window.sbClient.auth.signInWithOtp({email:v.email,options:{emailRedirectTo:location.origin+location.pathname}});
+  if(error) showLogin('Could not send the link: '+esc(error.message),{email:v.email});
+  else showGate(`<div class="gate-card"><div class="brand-mark">L</div><h1>Check your email</h1><p>We sent a sign-in link to <b>${esc(v.email)}</b>. Open it on this device to continue.</p></div>`);
 }
 async function signOut(){ await window.sbClient.auth.signOut(); location.reload(); }
 
