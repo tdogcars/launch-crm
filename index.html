@@ -3110,13 +3110,27 @@ async function boot(){
   if(params.get('f')) return publicFormPage(params.get('f'));
 
   showGate(`<div class="gate-card"><div class="brand-mark">L</div><h1>Launch CRM</h1><p>Connecting…</p></div>`);
-  window.sbClient.auth.onAuthStateChange((ev)=>{ if(ev==='SIGNED_IN' && !cloudUser) location.reload(); });
+  /* Watchdog: never leave the user on an endless "Connecting…" screen */
+  let booted = false;
+  setTimeout(()=>{
+    if(booted || $('#login-email')) return;
+    showGate(`<div class="gate-card"><div class="brand-mark">L</div><h1>Taking longer than usual…</h1>
+      <p>The connection seems stuck. Reloading usually fixes it; if not, sign out and back in.</p>
+      <button class="btn btn-primary" onclick="location.reload()">Reload</button>
+      <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="hardReset()">Sign out &amp; start over</button></div>`);
+  }, 12000);
   const {data:{session}} = await window.sbClient.auth.getSession();
-  if(!session){ showLogin(); return; }
+  if(!session){
+    /* Only listen for sign-in while the login screen is up — re-registering this
+       globally caused a reload loop (supabase re-announces SIGNED_IN on every load). */
+    window.sbClient.auth.onAuthStateChange((ev,s)=>{ if(s && !cloudUser) { cloudUser = s.user; location.reload(); } });
+    booted = true; showLogin(); return;
+  }
   cloudUser = session.user;
   try{ await loadState(); }
   catch(e){
     console.error(e);
+    booted = true;
     showGate(`<div class="gate-card"><div class="brand-mark">L</div><h1>Connection problem</h1><p>Could not load your workspace: ${esc(e.message||'unknown error')}.<br>Check that schema.sql has been run in Supabase.</p><button class="btn btn-primary" onclick="location.reload()">Retry</button></div>`);
     return;
   }
@@ -3125,9 +3139,14 @@ async function boot(){
   document.querySelector('.sidebar-foot').insertAdjacentHTML('beforeend',
     `<button class="btn btn-ghost btn-sm" style="width:100%;margin-top:6px;justify-content:flex-start" onclick="showSetPassword()">${icon('pen',13)} Set / change password</button>
      <button class="btn btn-ghost btn-sm" style="width:100%;margin-top:2px;justify-content:flex-start" onclick="signOut()">${icon('arrowLeft',13)} Sign out</button>`);
+  booted = true;
   hideGate();
   startRealtime();
   render();
+}
+function hardReset(){
+  try{ Object.keys(localStorage).filter(k=>k.startsWith('sb-')).forEach(k=>localStorage.removeItem(k)); }catch(e){}
+  location.reload();
 }
 boot();
 if('serviceWorker' in navigator && location.protocol.startsWith('http')){
